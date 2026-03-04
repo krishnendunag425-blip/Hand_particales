@@ -3,19 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Refined Gesture Engine</title>
+    <title>Kinetic Particle Engine</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         canvas { display: block; }
         .input_video { display: none; }
         #overlay { position: fixed; inset: 0; background: #000; z-index: 1000; display: flex; align-items: center; justify-content: center; }
-        button { padding: 20px 40px; background: #0ff; border: none; font-weight: bold; border-radius: 50px; }
-        #hud { position: absolute; top: 20px; width: 100%; text-align: center; color: #0ff; font-family: monospace; pointer-events: none; }
+        button { padding: 20px 40px; background: #0ff; border: none; font-weight: bold; border-radius: 50px; box-shadow: 0 0 20px #0ff; color: #000; cursor: pointer; }
+        #hud { position: absolute; top: 20px; width: 100%; text-align: center; color: #0ff; font-family: monospace; pointer-events: none; text-shadow: 0 0 5px #0ff; }
     </style>
 </head>
 <body>
-    <div id="overlay"><button onclick="start()">INITIALIZE ENGINE</button></div>
-    <div id="hud">SYSTEM: STANDBY</div>
+    <div id="overlay"><button onclick="start()">ACTIVATE CORE</button></div>
+    <div id="hud">SYSTEM: STABLE | 0.75X</div>
     <video class="input_video" playsinline muted></video>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -27,7 +27,12 @@
         const hud = document.getElementById('hud');
         let scene, camera, renderer, particles, targetPositions;
         const count = 5000;
-        let currentShape = 'saturn';
+        let isExploding = false;
+        let lastPalmPos = { x: 0, y: 0 };
+        
+        // Color variables for lerping
+        const colorCyan = new THREE.Color(0x00ffff);
+        const colorRed = new THREE.Color(0xff2200);
 
         function start() {
             document.getElementById('overlay').style.display = 'none';
@@ -51,7 +56,11 @@
             geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 
             particles = new THREE.Points(geo, new THREE.PointsMaterial({ 
-                color: 0x00ffff, size: 0.12, blending: THREE.AdditiveBlending, transparent: true 
+                color: colorCyan.getHex(), 
+                size: 0.14, 
+                blending: THREE.AdditiveBlending, 
+                transparent: true, 
+                depthWrite: false 
             }));
             scene.add(particles);
             
@@ -59,7 +68,6 @@
             animate();
         }
 
-        // --- SHAPE LOGIC ---
         function setSaturn() {
             for (let i = 0; i < count; i++) {
                 const i3 = i * 3;
@@ -71,7 +79,7 @@
                     targetPositions[i3+2] = 3 * Math.cos(phi);
                 } else {
                     const angle = Math.random() * Math.PI * 2;
-                    const r = 5 + Math.random() * 1.5;
+                    const r = 5.5 + Math.random() * 1.5;
                     targetPositions[i3] = Math.cos(angle) * r;
                     targetPositions[i3+1] = (Math.random() - 0.5) * 0.2;
                     targetPositions[i3+2] = Math.sin(angle) * r;
@@ -79,16 +87,23 @@
             }
         }
 
-        function setHeart() {
-            for (let i = 0; i < count; i++) {
-                const t = Math.random() * Math.PI * 2;
-                const x = 16 * Math.pow(Math.sin(t), 3);
-                const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
-                const i3 = i * 3;
-                targetPositions[i3] = x * 0.3;
-                targetPositions[i3+1] = y * 0.3;
-                targetPositions[i3+2] = (Math.random() - 0.5) * 1;
+        function triggerBlast() {
+            if (isExploding) return;
+            isExploding = true;
+            hud.innerText = "CRITICAL VELOCITY: BLAST";
+            
+            // Set Color to Red immediately
+            particles.material.color.copy(colorRed);
+            
+            for (let i = 0; i < count * 3; i++) {
+                targetPositions[i] *= 5.0; // Violent expansion
             }
+
+            setTimeout(() => {
+                isExploding = false;
+                setSaturn();
+                hud.innerText = "SYSTEM: STABLE | 0.75X";
+            }, 700);
         }
 
         function initAI() {
@@ -100,22 +115,17 @@
                     const h = res.multiHandLandmarks[0];
                     const palm = h[9];
                     
-                    // Interaction Scaling
                     const x = (0.5 - palm.x) * 25;
                     const y = (0.5 - palm.y) * 20;
-                    particles.position.set(x, y, 0);
 
-                    // Pinch Detection (Thumb tip 4 to Index tip 8)
-                    const dist = Math.hypot(h[8].x - h[4].x, h[8].y - h[4].y);
-                    if (dist < 0.05 && currentShape !== 'heart') {
-                        setHeart(); currentShape = 'heart';
-                        particles.material.color.set(0xff0088);
-                        hud.innerText = "MODE: PINCH (HEART)";
-                    } else if (dist > 0.1 && currentShape !== 'saturn') {
-                        setSaturn(); currentShape = 'saturn';
-                        particles.material.color.set(0x00ffff);
-                        hud.innerText = "MODE: OPEN (SATURN)";
-                    }
+                    const dx = Math.abs(x - lastPalmPos.x);
+                    const dy = Math.abs(y - lastPalmPos.y);
+                    
+                    // Trigger blast if movement is sudden
+                    if (dx > 4.0 || dy > 4.0) triggerBlast();
+
+                    lastPalmPos = { x, y };
+                    particles.position.set(x, y, 0);
                 }
             });
 
@@ -129,10 +139,18 @@
         function animate() {
             requestAnimationFrame(animate);
             const p = particles.geometry.attributes.position;
+            const speedFactor = 0.075; 
+
             for (let i = 0; i < count * 3; i++) {
-                p.array[i] += (targetPositions[i] - p.array[i]) * 0.1;
+                p.array[i] += (targetPositions[i] - p.array[i]) * speedFactor;
             }
             p.needsUpdate = true;
+            
+            // Smoothly lerp color back to Cyan if not exploding
+            if (!isExploding) {
+                particles.material.color.lerp(colorCyan, 0.05);
+            }
+
             particles.rotation.y += 0.005;
             renderer.render(scene, camera);
         }
